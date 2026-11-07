@@ -20,9 +20,10 @@
   .btn-ghost { background:#e5e7eb; color:#374151; font-size:14px; padding:10px; }
   button:disabled { opacity:.5; cursor:not-allowed; }
   .hidden { display:none; }
-  .msg { padding:12px; border-radius:10px; font-size:14px; margin-top:12px; }
+  .msg { padding:12px; border-radius:10px; font-size:15px; margin-top:12px; }
   .ok { background:#dcfce7; color:#166534; }
   .err { background:#fee2e2; color:#991b1b; }
+  .warn { background:#fef3c7; color:#92400e; font-weight:600; }
   .info { background:#e0e7ff; color:#3730a3; }
   .status { font-size:15px; margin:4px 0; }
   .status b { font-size:17px; }
@@ -37,7 +38,7 @@
   <h1 id="otelAdi">Personel Giriş / Çıkış</h1>
   <div class="sub">Lütfen giriş yaparken ve çıkarken ilgili butona basın.</div>
 
-  <!-- GİRİŞ (LOGIN) -->
+  <!-- OTURUM AÇMA -->
   <div id="loginCard" class="card hidden">
     <label>Kullanıcı adı</label>
     <input id="email" type="text" autocomplete="username" autocapitalize="none" placeholder="ad.soyad">
@@ -77,7 +78,7 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut, setPersistence, browserLocalPersistence }
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
-import { getFirestore, doc, getDoc, setDoc, addDoc, collection, serverTimestamp, query, where, orderBy, limit, onSnapshot }
+import { getFirestore, doc, getDoc, setDoc, collection, serverTimestamp, query, where, orderBy, limit, onSnapshot, writeBatch }
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 import { firebaseConfig, KONUM_KONTROLU, OTEL_LAT, OTEL_LNG, YARICAP_METRE, OTEL_ADI } from "./firebase-config.js";
 
@@ -90,10 +91,13 @@ const $ = id => document.getElementById(id);
 $("otelAdi").textContent = OTEL_ADI + " — Personel";
 const show = (id, on) => $(id).classList.toggle("hidden", !on);
 const say = (id, text, cls) => { $(id).innerHTML = text ? `<div class="msg ${cls}">${text}</div>` : ""; };
+const saat = ts => ts ? ts.toDate().toLocaleString("tr-TR", { day:"2-digit", month:"2-digit", hour:"2-digit", minute:"2-digit" }) : "—";
 
-let currentUser = null, userName = "", lastType = null, busy = false, unsubHist = null;
+let currentUser = null, userName = "", busy = false;
+let durum = null, durumHazir = false, durumBekliyor = false;
+let unsubHist = null, unsubDurum = null;
 
-// Saat sadece gösterim amaçlı; kayıt saati SUNUCUDAN alınır.
+// Ekrandaki saat sadece gösterim amaçlı; kayıt saati SUNUCUDAN alınır.
 setInterval(() => { $("clock").textContent = new Date().toLocaleTimeString("tr-TR"); }, 1000);
 
 $("loginBtn").onclick = async () => {
@@ -122,6 +126,7 @@ $("saveNameBtn").onclick = async () => {
 onAuthStateChanged(auth, async user => {
   currentUser = user;
   if (unsubHist) { unsubHist(); unsubHist = null; }
+  if (unsubDurum) { unsubDurum(); unsubDurum = null; }
   if (!user) { show("loginCard", true); show("nameCard", false); show("mainCard", false); show("histCard", false); return; }
   show("loginCard", false);
   const snap = await getDoc(doc(db, "users", user.uid));
@@ -133,20 +138,27 @@ onAuthStateChanged(auth, async user => {
 function enterMain() {
   show("nameCard", false); show("mainCard", true); show("histCard", true);
   $("who").textContent = userName;
+
+  // Anlık durum (sunucudaki "durum" belgesi)
+  unsubDurum = onSnapshot(doc(db, "durum", currentUser.uid), { includeMetadataChanges: true }, s => {
+    durum = s.exists() ? s.data() : null;
+    durumBekliyor = s.metadata.hasPendingWrites;
+    durumHazir = true;
+    const iceride = durum && durum.type === "in";
+    $("state").textContent = iceride ? "İÇERİDE" : "DIŞARIDA";
+    $("state").style.color = iceride ? "#16a34a" : "#dc2626";
+  }, e => say("mainMsg", "Durum okunamadı: " + e.message, "err"));
+
+  // Son 10 kayıt
   const q = query(collection(db, "logs"), where("uid", "==", currentUser.uid), orderBy("ts", "desc"), limit(10));
   unsubHist = onSnapshot(q, snap => {
     const rows = [];
     snap.forEach(d => rows.push(d.data()));
-    lastType = rows.length ? rows[0].type : null;
-    $("state").textContent = lastType === "in" ? "İÇERİDE" : "DIŞARIDA";
-    $("state").style.color = lastType === "in" ? "#16a34a" : "#dc2626";
-    $("inBtn").disabled = lastType === "in";
-    $("outBtn").disabled = lastType !== "in";
     $("hist").innerHTML = rows.map(r => {
       const t = r.ts ? r.ts.toDate().toLocaleString("tr-TR") : "kaydediliyor…";
       return `<div><span class="${r.type==="in"?"tag-in":"tag-out"}">${r.type==="in"?"GİRİŞ":"ÇIKIŞ"}</span><span>${t}</span></div>`;
     }).join("") || "<div>Henüz kayıt yok.</div>";
-  });
+  }, () => { $("hist").innerHTML = "<div>Geçmiş şu an yüklenemedi.</div>"; });
 }
 
 function getPosition() {
@@ -164,6 +176,14 @@ function distanceM(lat1, lng1, lat2, lng2) {
 
 async function record(type) {
   if (busy) return;
+  if (!durumHazir || durumBekliyor) return say("mainMsg", "Lütfen birkaç saniye bekleyip tekrar deneyin.", "info");
+
+  const iceride = durum && durum.type === "in";
+  if (type === "in" && iceride)
+    return say("mainMsg", `⚠️ Zaten içeridesiniz. Giriş saatiniz: ${saat(durum.lastIn)}<br>Çıkarken ÇIKIŞ YAPTIM butonuna basın.`, "warn");
+  if (type === "out" && !iceride)
+    return say("mainMsg", "⚠️ Zaten dışarıdasınız. Önce GİRİŞ YAPTIM butonuna basmalısınız.", "warn");
+
   busy = true; $("inBtn").disabled = $("outBtn").disabled = true;
   say("mainMsg", "Kaydediliyor…", "info");
   try {
@@ -174,20 +194,30 @@ async function record(type) {
       dist = Math.round(distanceM(lat, lng, OTEL_LAT, OTEL_LNG));
       if (dist > YARICAP_METRE) throw new Error(`Otelden ${dist} m uzaktasınız. Kayıt için otelde olmalısınız.`);
     }
-    await addDoc(collection(db, "logs"), {
+    const logRef = doc(collection(db, "logs"));
+    const batch = writeBatch(db);
+    batch.set(logRef, {
       uid: currentUser.uid, name: userName, type,
       ts: serverTimestamp(),          // SUNUCU saati — telefon saati etkilemez
       lat, lng, dist,
       ua: navigator.userAgent.slice(0, 120)
     });
+    batch.set(doc(db, "durum", currentUser.uid), {
+      type, ts: serverTimestamp(), logId: logRef.id,
+      lastIn:  type === "in"  ? serverTimestamp() : (durum ? durum.lastIn  : null),
+      lastOut: type === "out" ? serverTimestamp() : (durum ? durum.lastOut : null)
+    });
+    await batch.commit();
     say("mainMsg", type === "in" ? "✅ Giriş kaydedildi. İyi çalışmalar!" : "✅ Çıkış kaydedildi. İyi günler!", "ok");
   } catch (e) {
-    const m = e.code === 1 ? "Konum izni vermeniz gerekiyor (tarayıcı ayarları)." : (e.message || "Hata oluştu");
+    let m;
+    if (e.code === 1) m = "Konum izni vermeniz gerekiyor (tarayıcı ayarları).";
+    else if (e.code === "permission-denied") m = "İşlem reddedildi. Durumunuz başka bir cihazdan değişmiş olabilir; sayfayı yenileyin.";
+    else m = e.message || "Hata oluştu";
     say("mainMsg", "❌ " + m, "err");
   } finally {
     busy = false;
-    $("inBtn").disabled = lastType === "in";
-    $("outBtn").disabled = lastType !== "in";
+    $("inBtn").disabled = $("outBtn").disabled = false;
   }
 }
 $("inBtn").onclick = () => record("in");
