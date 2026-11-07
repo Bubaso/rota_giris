@@ -37,7 +37,7 @@
 
   <div id="loginCard" class="card">
     <div class="row">
-      <input id="email" type="email" placeholder="E‑posta" autocomplete="username">
+      <input id="email" type="text" placeholder="Kullanıcı adı" autocomplete="username" autocapitalize="none">
       <input id="pass" type="password" placeholder="Şifre" autocomplete="current-password">
       <button id="loginBtn">Oturum Aç</button>
     </div>
@@ -97,8 +97,9 @@ let users = {}, unsubBoard = null, lastRows = [];
 
 $("loginBtn").onclick = async () => {
   $("loginMsg").innerHTML = "";
-  try { await signInWithEmailAndPassword(auth, $("email").value.trim(), $("pass").value); }
-  catch { $("loginMsg").innerHTML = '<div class="msg err">E‑posta veya şifre hatalı.</div>'; }
+  let u = $("email").value.trim().toLowerCase(); if (!u.includes("@")) u += "@rotahotel.local";
+  try { await signInWithEmailAndPassword(auth, u, $("pass").value); }
+  catch { $("loginMsg").innerHTML = '<div class="msg err">Kullanıcı adı veya şifre hatalı.</div>'; }
 };
 $("logoutBtn").onclick = () => signOut(auth);
 
@@ -112,7 +113,7 @@ onAuthStateChanged(auth, async user => {
     await signOut(auth); return;
   }
   $("loginCard").classList.add("hidden"); $("panel").classList.remove("hidden");
-  const today = new Date().toISOString().slice(0, 10);
+  const n = new Date(), today = `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,"0")}-${String(n.getDate()).padStart(2,"0")}`;
   $("from").value = today; $("to").value = today;
   startBoard();
   loadList();
@@ -128,9 +129,10 @@ async function loadUsers() {
 // Canlı pano: son 300 kayıt üzerinden her personelin son durumu
 function startBoard() {
   const q = query(collection(db, "logs"), orderBy("ts", "desc"), limit(300));
-  unsubBoard = onSnapshot(q, snap => {
+  unsubBoard = onSnapshot(q, async snap => {
     const last = {};
     snap.forEach(d => { const r = d.data(); if (!last[r.uid]) last[r.uid] = r; });
+    if (Object.keys(last).some(uid => !users[uid])) await loadUsers(); // yeni personel geldiyse listeyi tazele
     const ids = Object.keys(users);
     let inside = 0;
     $("board").innerHTML = ids.map(uid => {
@@ -183,7 +185,7 @@ $("csvBtn").onclick = () => {
     const d = r.ts ? r.ts.toDate() : null;
     return [r.name, r.type === "in" ? "GİRİŞ" : "ÇIKIŞ", d ? fmtD(d) : "", d ? fmtT(d) : "", r.dist ?? "", r._dur].join(";");
   }).join("\n");
-  const blob = new Blob(["﻿" + head + body], { type: "text/csv;charset=utf-8" });
+  const blob = new Blob(["\ufeff" + head + body], { type: "text/csv;charset=utf-8" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob); a.download = `puantaj_${$("from").value}_${$("to").value}.csv`; a.click();
 };
