@@ -12,8 +12,8 @@ export const firebaseConfig = {
 // Otel konumu (Google Haritalar'dan alın). Konum kontrolünü kapatmak için
 // KONUM_KONTROLU = false yapın.
 export const KONUM_KONTROLU = true;
-export const OTEL_LAT = 0.0;      // örn. 36.8841
-export const OTEL_LNG = 0.0;      // örn. 30.7056
-export const YARICAP_METRE = 150; // otele bu mesafeden uzakta kayıt alınmaz
+export const OTEL_LAT = 39.925489;
+export const OTEL_LNG = 32.855259;
+export const YARICAP_METRE = 100; // otele bu mesafeden uzakta kayıt alınmaz
 
 export const OTEL_ADI = "Rota Bulvar Otel";
