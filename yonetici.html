@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Yönetici Paneli</title>
+<style>
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:-apple-system,system-ui,Segoe UI,Roboto,sans-serif; background:#f3f4f6; color:#111; }
+  .wrap { max-width:1000px; margin:0 auto; padding:16px; }
+  h1 { font-size:20px; margin:0 0 12px; }
+  .card { background:#fff; border-radius:12px; padding:16px; box-shadow:0 1px 3px rgba(0,0,0,.08); margin-bottom:14px; }
+  input, select { padding:10px; font-size:15px; border:1px solid #d1d5db; border-radius:8px; }
+  button { padding:10px 14px; font-size:15px; border:0; border-radius:8px; cursor:pointer; background:#1d4ed8; color:#fff; }
+  .ghost { background:#e5e7eb; color:#374151; }
+  .hidden { display:none; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .msg { padding:10px; border-radius:8px; font-size:14px; margin-top:10px; }
+  .err { background:#fee2e2; color:#991b1b; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th, td { text-align:left; padding:8px 6px; border-bottom:1px solid #eee; white-space:nowrap; }
+  th { background:#f9fafb; font-size:12px; text-transform:uppercase; color:#6b7280; }
+  .in { color:#16a34a; font-weight:600; } .out { color:#dc2626; font-weight:600; }
+  .pill { display:inline-block; padding:3px 8px; border-radius:99px; font-size:12px; font-weight:600; }
+  .pill.in { background:#dcfce7; } .pill.out { background:#fee2e2; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:8px; }
+  .person { border:1px solid #e5e7eb; border-radius:10px; padding:10px; }
+  .person small { color:#6b7280; display:block; margin-top:2px; }
+  .live { color:#16a34a; font-size:12px; }
+  .tbl { overflow-x:auto; }
+  .warn { color:#b45309; font-size:12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1 id="title">Yönetici Paneli</h1>
+
+  <div id="loginCard" class="card">
+    <div class="row">
+      <input id="email" type="email" placeholder="E‑posta" autocomplete="username">
+      <input id="pass" type="password" placeholder="Şifre" autocomplete="current-password">
+      <button id="loginBtn">Oturum Aç</button>
+    </div>
+    <div id="loginMsg"></div>
+  </div>
+
+  <div id="panel" class="hidden">
+    <div class="card">
+      <div class="row" style="justify-content:space-between">
+        <div><b>Şu an durum</b> <span class="live">● canlı</span></div>
+        <div class="row">
+          <span id="inCount"></span>
+          <button class="ghost" id="logoutBtn">Çıkış</button>
+        </div>
+      </div>
+      <div class="grid" id="board" style="margin-top:10px"></div>
+    </div>
+
+    <div class="card">
+      <div class="row">
+        <label>Tarih: <input type="date" id="from"></label>
+        <label>— <input type="date" id="to"></label>
+        <select id="personFilter"><option value="">Tüm personel</option></select>
+        <button id="loadBtn">Listele</button>
+        <button class="ghost" id="csvBtn">Excel (CSV) indir</button>
+      </div>
+      <div class="warn" style="margin-top:6px">Kayıtlar sunucu saatiyle damgalanır; hiçbir kayıt değiştirilemez veya silinemez.</div>
+      <div class="tbl" style="margin-top:10px">
+        <table>
+          <thead><tr><th>Personel</th><th>İşlem</th><th>Tarih</th><th>Saat</th><th>Mesafe</th><th>Süre</th></tr></thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+      <div id="summary" style="margin-top:12px;font-size:14px"></div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+import { getFirestore, collection, query, where, orderBy, onSnapshot, getDocs, Timestamp, limit }
+  from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { firebaseConfig, OTEL_ADI } from "./firebase-config.js";
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const $ = id => document.getElementById(id);
+$("title").textContent = OTEL_ADI + " — Yönetici Paneli";
+
+const fmtD = d => d.toLocaleDateString("tr-TR");
+const fmtT = d => d.toLocaleTimeString("tr-TR", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+const fmtDur = ms => { const m = Math.round(ms / 60000); return `${Math.floor(m/60)} sa ${m%60} dk`; };
+
+let users = {}, unsubBoard = null, lastRows = [];
+
+$("loginBtn").onclick = async () => {
+  $("loginMsg").innerHTML = "";
+  try { await signInWithEmailAndPassword(auth, $("email").value.trim(), $("pass").value); }
+  catch { $("loginMsg").innerHTML = '<div class="msg err">E‑posta veya şifre hatalı.</div>'; }
+};
+$("logoutBtn").onclick = () => signOut(auth);
+
+onAuthStateChanged(auth, async user => {
+  if (unsubBoard) { unsubBoard(); unsubBoard = null; }
+  if (!user) { $("loginCard").classList.remove("hidden"); $("panel").classList.add("hidden"); return; }
+  try {
+    await loadUsers();
+  } catch (e) {
+    $("loginMsg").innerHTML = '<div class="msg err">Bu hesap yönetici değil. (Firestore > admins koleksiyonuna UID eklenmeli)</div>';
+    await signOut(auth); return;
+  }
+  $("loginCard").classList.add("hidden"); $("panel").classList.remove("hidden");
+  const today = new Date().toISOString().slice(0, 10);
+  $("from").value = today; $("to").value = today;
+  startBoard();
+  loadList();
+});
+
+async function loadUsers() {
+  const snap = await getDocs(collection(db, "users"));
+  users = {};
+  const sel = $("personFilter"); sel.innerHTML = '<option value="">Tüm personel</option>';
+  snap.forEach(d => { users[d.id] = d.data(); sel.innerHTML += `<option value="${d.id}">${d.data().name}</option>`; });
+}
+
+// Canlı pano: son 300 kayıt üzerinden her personelin son durumu
+function startBoard() {
+  const q = query(collection(db, "logs"), orderBy("ts", "desc"), limit(300));
+  unsubBoard = onSnapshot(q, snap => {
+    const last = {};
+    snap.forEach(d => { const r = d.data(); if (!last[r.uid]) last[r.uid] = r; });
+    const ids = Object.keys(users);
+    let inside = 0;
+    $("board").innerHTML = ids.map(uid => {
+      const r = last[uid];
+      const isIn = r && r.type === "in";
+      if (isIn) inside++;
+      const t = r && r.ts ? `${fmtD(r.ts.toDate())} ${fmtT(r.ts.toDate())}` : "kayıt yok";
+      return `<div class="person"><b>${users[uid].name}</b>
+        <span class="pill ${isIn ? "in" : "out"}" style="float:right">${isIn ? "İÇERİDE" : "DIŞARIDA"}</span>
+        <small>Son işlem: ${t}</small></div>`;
+    }).join("") || "Henüz personel kaydı yok.";
+    $("inCount").textContent = `İçeride: ${inside} / ${ids.length}`;
+    loadList(); // yeni kayıt gelince listeyi de tazele
+  });
+}
+
+async function loadList() {
+  const from = new Date($("from").value + "T00:00:00");
+  const to = new Date($("to").value + "T23:59:59.999");
+  const person = $("personFilter").value;
+  let q = query(collection(db, "logs"), where("ts", ">=", Timestamp.fromDate(from)), where("ts", "<=", Timestamp.fromDate(to)), orderBy("ts", "asc"));
+  const snap = await getDocs(q);
+  let rows = [];
+  snap.forEach(d => rows.push(d.data()));
+  if (person) rows = rows.filter(r => r.uid === person);
+
+  // çalışma süresi: giriş→çıkış eşleştirme
+  const openIn = {}, totals = {};
+  rows.forEach(r => {
+    r._dur = "";
+    if (r.type === "in") openIn[r.uid] = r;
+    else if (openIn[r.uid] && openIn[r.uid].ts && r.ts) {
+      const ms = r.ts.toMillis() - openIn[r.uid].ts.toMillis();
+      r._dur = fmtDur(ms); totals[r.uid] = (totals[r.uid] || 0) + ms; openIn[r.uid] = null;
+    }
+  });
+  lastRows = rows;
+  $("rows").innerHTML = [...rows].reverse().map(r => {
+    const d = r.ts ? r.ts.toDate() : null;
+    return `<tr><td>${r.name}</td><td class="${r.type}">${r.type === "in" ? "GİRİŞ" : "ÇIKIŞ"}</td>
+      <td>${d ? fmtD(d) : "-"}</td><td>${d ? fmtT(d) : "-"}</td><td>${r.dist != null ? r.dist + " m" : "-"}</td><td>${r._dur}</td></tr>`;
+  }).join("") || '<tr><td colspan="6">Kayıt yok.</td></tr>';
+  $("summary").innerHTML = "<b>Toplam çalışma süresi:</b> " + (Object.keys(totals).map(u => `${(users[u]||{}).name || u}: ${fmtDur(totals[u])}`).join(" · ") || "—");
+}
+$("loadBtn").onclick = loadList;
+
+$("csvBtn").onclick = () => {
+  const head = "Personel;İşlem;Tarih;Saat;Mesafe (m);Süre\n";
+  const body = lastRows.map(r => {
+    const d = r.ts ? r.ts.toDate() : null;
+    return [r.name, r.type === "in" ? "GİRİŞ" : "ÇIKIŞ", d ? fmtD(d) : "", d ? fmtT(d) : "", r.dist ?? "", r._dur].join(";");
+  }).join("\n");
+  const blob = new Blob(["﻿" + head + body], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = `puantaj_${$("from").value}_${$("to").value}.csv`; a.click();
+};
+</script>
+</body>
+</html>

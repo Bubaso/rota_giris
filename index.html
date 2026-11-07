@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Personel Giriş / Çıkış</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: -apple-system, system-ui, Segoe UI, Roboto, sans-serif; background:#f3f4f6; color:#111; }
+  .wrap { max-width:420px; margin:0 auto; padding:20px 16px 40px; }
+  h1 { font-size:18px; margin:0 0 4px; color:#1f2937; }
+  .sub { color:#6b7280; font-size:14px; margin-bottom:20px; }
+  .card { background:#fff; border-radius:14px; padding:18px; box-shadow:0 1px 3px rgba(0,0,0,.08); margin-bottom:14px; }
+  label { display:block; font-size:13px; color:#374151; margin:10px 0 4px; }
+  input { width:100%; padding:12px; font-size:16px; border:1px solid #d1d5db; border-radius:10px; }
+  button { width:100%; padding:16px; font-size:17px; font-weight:600; border:0; border-radius:12px; cursor:pointer; margin-top:10px; }
+  .btn-main { background:#1d4ed8; color:#fff; }
+  .btn-in  { background:#16a34a; color:#fff; font-size:22px; padding:26px; }
+  .btn-out { background:#dc2626; color:#fff; font-size:22px; padding:26px; }
+  .btn-ghost { background:#e5e7eb; color:#374151; font-size:14px; padding:10px; }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  .hidden { display:none; }
+  .msg { padding:12px; border-radius:10px; font-size:14px; margin-top:12px; }
+  .ok { background:#dcfce7; color:#166534; }
+  .err { background:#fee2e2; color:#991b1b; }
+  .info { background:#e0e7ff; color:#3730a3; }
+  .status { font-size:15px; margin:4px 0; }
+  .status b { font-size:17px; }
+  .clock { font-variant-numeric: tabular-nums; font-size:28px; font-weight:700; text-align:center; margin:6px 0 14px; color:#1f2937; }
+  .hist { font-size:14px; }
+  .hist div { padding:8px 0; border-bottom:1px solid #f3f4f6; display:flex; justify-content:space-between; }
+  .tag-in { color:#16a34a; font-weight:600; } .tag-out { color:#dc2626; font-weight:600; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1 id="otelAdi">Personel Giriş / Çıkış</h1>
+  <div class="sub">Lütfen giriş yaparken ve çıkarken ilgili butona basın.</div>
+
+  <!-- GİRİŞ (LOGIN) -->
+  <div id="loginCard" class="card hidden">
+    <label>E‑posta</label>
+    <input id="email" type="email" autocomplete="username" placeholder="ad.soyad@rotahitel.local">
+    <label>Şifre</label>
+    <input id="pass" type="password" autocomplete="current-password">
+    <button class="btn-main" id="loginBtn">Oturum Aç</button>
+    <div id="loginMsg"></div>
+  </div>
+
+  <!-- İLK KEZ: AD SOYAD -->
+  <div id="nameCard" class="card hidden">
+    <div class="msg info">İlk kez giriş yapıyorsunuz. Lütfen adınızı ve soyadınızı yazın. Bu bilgi sonradan değiştirilemez.</div>
+    <label>Ad Soyad</label>
+    <input id="fullName" type="text" placeholder="Örn. Ahmet Yılmaz">
+    <button class="btn-main" id="saveNameBtn">Kaydet</button>
+    <div id="nameMsg"></div>
+  </div>
+
+  <!-- ANA EKRAN -->
+  <div id="mainCard" class="card hidden">
+    <div class="status">Personel: <b id="who"></b></div>
+    <div class="status">Durum: <b id="state">—</b></div>
+    <div class="clock" id="clock">--:--:--</div>
+    <button class="btn-in" id="inBtn">GİRİŞ YAPTIM</button>
+    <button class="btn-out" id="outBtn">ÇIKIŞ YAPTIM</button>
+    <div id="mainMsg"></div>
+    <button class="btn-ghost" id="logoutBtn">Oturumu kapat</button>
+  </div>
+
+  <div id="histCard" class="card hidden">
+    <div style="font-weight:600;margin-bottom:6px">Son kayıtlarım</div>
+    <div class="hist" id="hist"></div>
+  </div>
+</div>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut, setPersistence, browserLocalPersistence }
+  from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+import { getFirestore, doc, getDoc, setDoc, addDoc, collection, serverTimestamp, query, where, orderBy, limit, onSnapshot }
+  from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { firebaseConfig, KONUM_KONTROLU, OTEL_LAT, OTEL_LNG, YARICAP_METRE, OTEL_ADI } from "./firebase-config.js";
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+await setPersistence(auth, browserLocalPersistence);
+
+const $ = id => document.getElementById(id);
+$("otelAdi").textContent = OTEL_ADI + " — Personel";
+const show = (id, on) => $(id).classList.toggle("hidden", !on);
+const say = (id, text, cls) => { $(id).innerHTML = text ? `<div class="msg ${cls}">${text}</div>` : ""; };
+
+let currentUser = null, userName = "", lastType = null, busy = false, unsubHist = null;
+
+// Saat sadece gösterim amaçlı; kayıt saati SUNUCUDAN alınır.
+setInterval(() => { $("clock").textContent = new Date().toLocaleTimeString("tr-TR"); }, 1000);
+
+$("loginBtn").onclick = async () => {
+  say("loginMsg", "");
+  try {
+    await signInWithEmailAndPassword(auth, $("email").value.trim(), $("pass").value);
+  } catch (e) {
+    say("loginMsg", "E‑posta veya şifre hatalı.", "err");
+  }
+};
+$("logoutBtn").onclick = () => signOut(auth);
+
+$("saveNameBtn").onclick = async () => {
+  const name = $("fullName").value.trim();
+  if (name.length < 3) return say("nameMsg", "Lütfen ad soyad girin.", "err");
+  try {
+    await setDoc(doc(db, "users", currentUser.uid), { name, email: currentUser.email, createdAt: serverTimestamp() });
+    userName = name;
+    enterMain();
+  } catch (e) {
+    say("nameMsg", "Kaydedilemedi: " + e.message, "err");
+  }
+};
+
+onAuthStateChanged(auth, async user => {
+  currentUser = user;
+  if (unsubHist) { unsubHist(); unsubHist = null; }
+  if (!user) { show("loginCard", true); show("nameCard", false); show("mainCard", false); show("histCard", false); return; }
+  show("loginCard", false);
+  const snap = await getDoc(doc(db, "users", user.uid));
+  if (!snap.exists()) { show("nameCard", true); return; }
+  userName = snap.data().name;
+  enterMain();
+});
+
+function enterMain() {
+  show("nameCard", false); show("mainCard", true); show("histCard", true);
+  $("who").textContent = userName;
+  const q = query(collection(db, "logs"), where("uid", "==", currentUser.uid), orderBy("ts", "desc"), limit(10));
+  unsubHist = onSnapshot(q, snap => {
+    const rows = [];
+    snap.forEach(d => rows.push(d.data()));
+    lastType = rows.length ? rows[0].type : null;
+    $("state").textContent = lastType === "in" ? "İÇERİDE" : "DIŞARIDA";
+    $("state").style.color = lastType === "in" ? "#16a34a" : "#dc2626";
+    $("inBtn").disabled = lastType === "in";
+    $("outBtn").disabled = lastType !== "in";
+    $("hist").innerHTML = rows.map(r => {
+      const t = r.ts ? r.ts.toDate().toLocaleString("tr-TR") : "kaydediliyor…";
+      return `<div><span class="${r.type==="in"?"tag-in":"tag-out"}">${r.type==="in"?"GİRİŞ":"ÇIKIŞ"}</span><span>${t}</span></div>`;
+    }).join("") || "<div>Henüz kayıt yok.</div>";
+  });
+}
+
+function getPosition() {
+  return new Promise((res, rej) => {
+    if (!navigator.geolocation) return rej(new Error("Konum desteklenmiyor"));
+    navigator.geolocation.getCurrentPosition(p => res(p.coords), e => rej(e), { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
+  });
+}
+function distanceM(lat1, lng1, lat2, lng2) {
+  const R = 6371000, toR = x => x * Math.PI / 180;
+  const dLat = toR(lat2 - lat1), dLng = toR(lng2 - lng1);
+  const a = Math.sin(dLat/2)**2 + Math.cos(toR(lat1))*Math.cos(toR(lat2))*Math.sin(dLng/2)**2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+async function record(type) {
+  if (busy) return;
+  busy = true; $("inBtn").disabled = $("outBtn").disabled = true;
+  say("mainMsg", "Kaydediliyor…", "info");
+  try {
+    let lat = null, lng = null, dist = null;
+    if (KONUM_KONTROLU) {
+      const c = await getPosition();
+      lat = c.latitude; lng = c.longitude;
+      dist = Math.round(distanceM(lat, lng, OTEL_LAT, OTEL_LNG));
+      if (dist > YARICAP_METRE) throw new Error(`Otelden ${dist} m uzaktasınız. Kayıt için otelde olmalısınız.`);
+    }
+    await addDoc(collection(db, "logs"), {
+      uid: currentUser.uid, name: userName, type,
+      ts: serverTimestamp(),          // SUNUCU saati — telefon saati etkilemez
+      lat, lng, dist,
+      ua: navigator.userAgent.slice(0, 120)
+    });
+    say("mainMsg", type === "in" ? "✅ Giriş kaydedildi. İyi çalışmalar!" : "✅ Çıkış kaydedildi. İyi günler!", "ok");
+  } catch (e) {
+    const m = e.code === 1 ? "Konum izni vermeniz gerekiyor (tarayıcı ayarları)." : (e.message || "Hata oluştu");
+    say("mainMsg", "❌ " + m, "err");
+  } finally {
+    busy = false;
+    $("inBtn").disabled = lastType === "in";
+    $("outBtn").disabled = lastType !== "in";
+  }
+}
+$("inBtn").onclick = () => record("in");
+$("outBtn").onclick = () => record("out");
+</script>
+</body>
+</html>
