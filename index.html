@@ -39,8 +39,8 @@
 
   <!-- GİRİŞ (LOGIN) -->
   <div id="loginCard" class="card hidden">
-    <label>E‑posta</label>
-    <input id="email" type="email" autocomplete="username" placeholder="ad.soyad@rotahitel.local">
+    <label>Kullanıcı adı</label>
+    <input id="email" type="text" autocomplete="username" autocapitalize="none" placeholder="ad.soyad">
     <label>Şifre</label>
     <input id="pass" type="password" autocomplete="current-password">
     <button class="btn-main" id="loginBtn">Oturum Aç</button>
@@ -99,9 +99,10 @@ setInterval(() => { $("clock").textContent = new Date().toLocaleTimeString("tr-T
 $("loginBtn").onclick = async () => {
   say("loginMsg", "");
   try {
-    await signInWithEmailAndPassword(auth, $("email").value.trim(), $("pass").value);
+    let u = $("email").value.trim().toLowerCase(); if (!u.includes("@")) u += "@rotahotel.local";
+    await signInWithEmailAndPassword(auth, u, $("pass").value);
   } catch (e) {
-    say("loginMsg", "E‑posta veya şifre hatalı.", "err");
+    say("loginMsg", "Kullanıcı adı veya şifre hatalı.", "err");
   }
 };
 $("logoutBtn").onclick = () => signOut(auth);
