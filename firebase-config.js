@@ -16,4 +16,4 @@ export const OTEL_LAT = 0.0;      // örn. 36.8841
 export const OTEL_LNG = 0.0;      // örn. 30.7056
 export const YARICAP_METRE = 150; // otele bu mesafeden uzakta kayıt alınmaz
 
-export const OTEL_ADI = "Rotahıtel Bulvar Otel";
+export const OTEL_ADI = "Rota Bulvar Otel";
